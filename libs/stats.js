@@ -130,9 +130,6 @@ module.exports = function(logger, portalConfig, poolConfigs){
         _this.statPoolHistory.push(data);
     }
 
-
-
-
     this.getGlobalStats = function(callback){
 
         var statGatherTime = Date.now() / 1000 | 0;
@@ -150,7 +147,13 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 ['hgetall', ':stats'],
                 ['scard', ':blocksPending'],
                 ['scard', ':blocksConfirmed'],
-                ['scard', ':blocksKicked']
+                ['scard', ':blocksKicked'],
+                ['smembers', ':blocksPending'],
+                ['smembers', ':blocksConfirmed'],
+                ['hgetall', ':shares:roundCurrent'],
+                ['hgetall', ':blocksPendingConfirms'],
+                ['zrange', ':payments', -100, -1],
+                ['hgetall', ':shares:timesCurrent']
             ];
 
             var commandsPerCoin = redisCommandTemplates.length;
@@ -183,12 +186,38 @@ module.exports = function(logger, portalConfig, poolConfigs){
                                 invalidShares: replies[i + 2] ? (replies[i + 2].invalidShares || 0) : 0,
                                 totalPaid: replies[i + 2] ? (replies[i + 2].totalPaid || 0) : 0
                             },
+                            /* block stat counts */
                             blocks: {
                                 pending: replies[i + 3],
                                 confirmed: replies[i + 4],
                                 orphaned: replies[i + 5]
-                            }
+                            },
+                            /* show all pending blocks */
+                            pending: {
+                                blocks: replies[i + 6].sort(sortBlocks),
+                                confirms: (replies[i + 9] || {})
+                            },
+                            /* show last 50 found blocks */
+                            confirmed: {
+                                blocks: replies[i + 7].sort(sortBlocks).slice(0,50)
+                            },
+                            payments: [],
+                            currentRoundShares: (replies[i + 8] || {}),
+                            currentRoundTimes: (replies[i + 11] || {}),
+                            maxRoundTime: 0,
+                            shareCount: 0
                         };
+                        for(var j = replies[i + 10].length; j > 0; j--){
+                            var jsonObj;
+                            try {
+                                jsonObj = JSON.parse(replies[i + 10][j-1]);
+                            } catch(e) {
+                                jsonObj = null;
+                            }
+                            if (jsonObj !== null) {
+                                coinStats.payments.push(jsonObj);
+                            }
+                        }
                         allCoinStats[coinStats.name] = (coinStats);
                     }
                     callback();
@@ -433,13 +462,22 @@ module.exports = function(logger, portalConfig, poolConfigs){
         });
     };
 
+    function sortBlocks(a, b) {
+        var as = parseInt(a.split(":")[2]);
+        var bs = parseInt(b.split(":")[2]);
+        if (as > bs) return -1;
+        if (as < bs) return 1;
+        return 0;
+    }
+
     this.getReadableHashRateString = function(hashrate){
-        var i = -1;
-        var byteUnits = [ ' KH', ' MH', ' GH', ' TH', ' PH' ];
-        do {
-            hashrate = hashrate / 1000;
-			i++;
-        } while (hashrate > 1000);
+        hashrate = (hashrate * 1000000);
+        if (hashrate < 1000000) {
+            return '0 H/s';
+        }
+        var byteUnits = [ ' H/s', ' KH/s', ' MH/s', ' GH/s', ' TH/s', ' PH/s' ];
+        var i = Math.floor((Math.log(hashrate/1000) / Math.log(1000)) - 1);
+        hashrate = (hashrate/1000) / Math.pow(1000, i + 1);
         return hashrate.toFixed(2) + byteUnits[i];
     };
 
